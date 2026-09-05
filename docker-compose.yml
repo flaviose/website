@@ -1,0 +1,98 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: weatherbound
+      POSTGRES_USER: wb
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-wbsecret}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Runs once on first init — creates the users/readings tables.
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "5432:5432" # exposed so you can also seed from the host if you prefer
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wb -d weatherbound"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgres://wb:${DB_PASSWORD:-wbsecret}@db:5432/weatherbound
+      RESEND_API_KEY: ${RESEND_API_KEY}
+      MAIL_FROM: ${MAIL_FROM}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      INGEST_KEY: ${INGEST_KEY:?set INGEST_KEY in .env}
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # One-shot: creates the login account + demo data. Uses the build stage that
+  # still has full node_modules (pg, bcryptjs). Run with:
+  #   docker compose --profile seed run --rm seed
+  
+  web:
+    build: ./web
+    environment:
+      NODE_ENV: production
+    restart: unless-stopped
+
+  seed:
+    build:
+      context: .
+      target: builder
+    environment:
+      DATABASE_URL: postgres://wb:${DB_PASSWORD:-wbsecret}@db:5432/weatherbound
+      SEED_EMAIL: ${SEED_EMAIL:-flavio@weatherbound.com}
+      SEED_PASSWORD: ${SEED_PASSWORD:-changeme}
+      SEED_NAME: ${SEED_NAME:-Flavio}
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["node", "db/seed.mjs"]
+    profiles: ["seed"]
+
+  adduser:                          # <-- new block, aligned with seed:
+    build:
+      context: .
+      target: builder
+    environment:
+      DATABASE_URL: postgres://wb:${DB_PASSWORD:-wbsecret}@db:5432/weatherbound
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["node", "db/add-user.mjs"]
+    profiles: ["adduser"]
+
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    command: tunnel run
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    depends_on:
+      - app
+    restart: unless-stopped
+
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: mediamtx
+    restart: unless-stopped
+    ports:
+      - "1935:1935"   # RTMP ingest — Larix pushes here over your LAN
+      - "8888:8888"   # HLS output — browser reads here 
+      - "8889:8889"      # WebRTC signaling (WHEP) — TCP
+      - "8189:8189/udp"  # WebRTC media (ICE) — UDP
+  
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml
+
+volumes:
+  pgdata:

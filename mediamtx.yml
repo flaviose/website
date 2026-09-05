@@ -1,0 +1,26 @@
+authInternalUsers:
+  - user: publisher
+    pass: 2553a5867ee4cf0a15d8a86bf2e830c8df817c9116db8c8d
+    permissions:
+      - action: publish
+
+  - user: any
+    permissions:
+      - action: read
+      - action: playback
+
+  - user: any
+    ips: ['127.0.0.1', '::1']
+    permissions:
+      - action: api
+      - action: metrics
+      - action: pprof
+
+webrtcAdditionalHosts: [push.nodolab.app]
+webrtcICEUDPMuxAddress: :8189
+
+hlsVariant: lowLatency
+
+
+paths:
+  all_others:
